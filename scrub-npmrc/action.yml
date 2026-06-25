@@ -1,0 +1,18 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# scrub-npmrc
+name: "🧹 Scrub .npmrc (post cleanup)"
+# yamllint disable-line rule:line-length
+description: "Register a post-job step that securely removes a generated .npmrc file"
+
+inputs:
+  npmrc_path:
+    description: "Absolute path to the .npmrc file to remove at job end"
+    required: true
+
+runs:
+  using: "node24"
+  main: "index.js"
+  post: "index.js"
