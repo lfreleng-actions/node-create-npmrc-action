@@ -2,52 +2,278 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
-# actions-template
-name: "🛠️ Actions Template"
-description: "Description of action"
-# Any relevant notes/observations can go here
+# node-create-npmrc-action
+name: "📦 Node Create .npmrc"
+# yamllint disable-line rule:line-length
+description: "Create an .npmrc authenticated against a Nexus npm registry, then scrub it after the job"
 
 inputs:
-  input:
-    description: "Description of input"
-    required: true
+  # Registry location
+  nexus_host:
+    # yamllint disable-line rule:line-length
+    description: "Nexus server hostname (default: nexus3.<repository_owner>.org)"
+    required: false
+    default: ""
+  nexus_repository:
+    description: "Nexus npm repository/location"
+    required: false
+    default: "npm.snapshot"
+  registry_url:
+    # yamllint disable-line rule:line-length
+    description: "Full registry URL override ending with '/'; when set, nexus_host and nexus_repository are ignored"
+    required: false
+    default: ""
+  scope:
+    description: "npm scope for the auth entry (for example '@onap')"
+    required: false
+    default: ""
+  # Credential
+  nexus_user:
+    description: "Registry username (default: calling repository name)"
+    required: false
+    default: ""
+  nexus_password:
+    # yamllint disable-line rule:line-length
+    description: "Registry password/token; required unless load_credential is 'true'"
+    required: false
+    default: ""
+  # Optional 1Password credential loading
+  load_credential:
+    # yamllint disable-line rule:line-length
+    description: "Fetch the password from 1Password via credential-load-action ('true'/'false')"
+    required: false
+    default: "false"
+  vault_mapping_json:
+    # yamllint disable-line rule:line-length
+    description: "JSON mapping repository owner to 1Password vault (used when load_credential is 'true')"
+    required: false
+    default: ""
+  op_service_account_token:
+    # yamllint disable-line rule:line-length
+    description: "1Password service account token (used when load_credential is 'true')"
+    required: false
+    default: ""
+  # Output location and behaviour
+  path:
+    # yamllint disable-line rule:line-length
+    description: "Directory in which to write .npmrc (default: current working directory)"
+    required: false
+    default: "."
+  always_auth:
+    # yamllint disable-line rule:line-length
+    description: "Add 'always-auth=true' to the generated .npmrc ('true'/'false')"
+    required: false
+    default: "true"
 
 outputs:
-  output:
-    description: "Description of output"
-    value: ${{ steps.code.outputs.output }}
+  npmrc_path:
+    description: "Absolute path to the generated .npmrc file"
+    value: ${{ steps.write.outputs.npmrc_path }}
+  registry_url:
+    description: "Resolved npm registry URL"
+    value: ${{ steps.write.outputs.registry_url }}
 
 runs:
   using: "composite"
   steps:
-    - name: "Friendly Name"
-      id: code
+    # Optionally fetch the registry password from 1Password. Disabled by
+    # default; callers that already hold the password pass it directly.
+    - name: "Load Nexus credential from 1Password"
+      if: inputs.load_credential == 'true'
+      id: credential
+      # yamllint disable-line rule:line-length
+      uses: lfreleng-actions/credential-load-action@70825888f5643bf478dffc01a2638baa222513de # v1.0.0
+      with:
+        vault_mapping_json: ${{ inputs.vault_mapping_json }}
+        op_service_account_token: ${{ inputs.op_service_account_token }}
+
+    - name: "Create authenticated .npmrc"
+      id: write
       shell: bash
       env:
-        INPUT_VALUE: ${{ inputs.input }}
+        OWNER: ${{ github.repository_owner }}
+        REPO_NAME: ${{ github.event.repository.name }}
+        NEXUS_HOST: ${{ inputs.nexus_host }}
+        NEXUS_REPOSITORY: ${{ inputs.nexus_repository }}
+        REGISTRY_URL_OVERRIDE: ${{ inputs.registry_url }}
+        SCOPE: ${{ inputs.scope }}
+        NEXUS_USER: ${{ inputs.nexus_user }}
+        INPUT_PASSWORD: ${{ inputs.nexus_password }}
+        LOADED_CREDENTIAL: ${{ steps.credential.outputs.credential }}
+        LOAD_CREDENTIAL: ${{ inputs.load_credential }}
+        TARGET_PATH: ${{ inputs.path }}
+        ALWAYS_AUTH: ${{ inputs.always_auth }}
       run: |
-        # Friendly Name
-        input="$INPUT_VALUE"
-        if [ -z "$input" ]; then
-          echo "Error: mandatory input was not set/configured ❌"
+        # Create an authenticated .npmrc for a Nexus npm registry
+        set -euo pipefail
+
+        # Validate the boolean inputs
+        case "${LOAD_CREDENTIAL}" in
+          true | false) ;;
+          *)
+            echo "Error: load_credential must be 'true' or 'false' ❌"
+            echo "Received value: '${LOAD_CREDENTIAL}'"
+            exit 1 ;;
+        esac
+        case "${ALWAYS_AUTH}" in
+          true | false) ;;
+          *)
+            echo "Error: always_auth must be 'true' or 'false' ❌"
+            echo "Received value: '${ALWAYS_AUTH}'"
+            exit 1 ;;
+        esac
+
+        # Select the password source and mask it as early as possible
+        if [ "${LOAD_CREDENTIAL}" = "true" ]; then
+          password="${LOADED_CREDENTIAL}"
+        else
+          password="${INPUT_PASSWORD}"
+        fi
+        if [ -z "${password}" ]; then
+          echo "Error: no registry password available ❌"
+          echo "Provide nexus_password, or set load_credential to 'true'"
+          exit 1
+        fi
+        echo "::add-mask::${password}"
+
+        # The username defaults to the calling repository name
+        user="${NEXUS_USER}"
+        if [ -z "${user}" ]; then
+          user="${REPO_NAME}"
+        fi
+        if [ -z "${user}" ]; then
+          echo "Error: registry username unavailable in context ❌"
           exit 1
         fi
 
-        # Write the output using the multiline heredoc format with a random
-        # delimiter so that an input containing newlines cannot inject
-        # additional keys into $GITHUB_OUTPUT (output-file injection). The
-        # delimiter is built from shell-builtin randomness (no external
-        # tools such as openssl/uuidgen, which are not guaranteed on
-        # self-hosted runners) and regenerated until it is provably absent
-        # from the value being emitted.
-        delimiter="ghadelim_${RANDOM}${RANDOM}${RANDOM}${RANDOM}"
-        while [[ "$input" == *"$delimiter"* ]]; do
-          delimiter="ghadelim_${RANDOM}${RANDOM}${RANDOM}${RANDOM}"
-        done
+        # Resolve the registry URL, either from an explicit override or by
+        # composing it from the host and repository inputs
+        if [ -n "${REGISTRY_URL_OVERRIDE}" ]; then
+          registry="${REGISTRY_URL_OVERRIDE}"
+          case "${registry}" in
+            https://*/ | http://*/) ;;
+            *)
+              echo "Error: registry_url must start with http(s)://"
+              echo "and end with a trailing slash '/' ❌"
+              echo "Received value: '${registry}'"
+              exit 1 ;;
+          esac
+          case "${registry}" in
+            *[[:space:]]*)
+              echo "Error: registry_url must not contain whitespace ❌"
+              exit 1 ;;
+          esac
+        else
+          host="${NEXUS_HOST}"
+          if [ -z "${host}" ]; then
+            if [ -z "${OWNER}" ]; then
+              echo "Error: cannot derive Nexus host ❌"
+              echo "(repository owner unknown)"
+              exit 1
+            fi
+            host="nexus3.${OWNER}.org"
+          fi
+          if [ -z "${NEXUS_REPOSITORY}" ]; then
+            echo "Error: nexus_repository must not be empty ❌"
+            exit 1
+          fi
+          # Validate host and repository to keep the .npmrc structure intact
+          case "${host}" in
+            *[!A-Za-z0-9.-]*)
+              echo "Error: nexus_host contains invalid characters ❌"
+              echo "Allowed characters: A-Z a-z 0-9 . -"
+              exit 1 ;;
+          esac
+          case "${NEXUS_REPOSITORY}" in
+            *[!A-Za-z0-9._-]*)
+              echo "Error: nexus_repository contains invalid characters ❌"
+              echo "Allowed characters: A-Z a-z 0-9 . _ -"
+              exit 1 ;;
+          esac
+          registry="https://${host}/repository/${NEXUS_REPOSITORY}/"
+        fi
+
+        # Validate the optional npm scope
+        if [ -n "${SCOPE}" ]; then
+          case "${SCOPE}" in
+            @*) ;;
+            *)
+              echo "Error: scope must start with '@' (for example '@onap') ❌"
+              exit 1 ;;
+          esac
+          case "${SCOPE}" in
+            *[!@A-Za-z0-9._-]*)
+              echo "Error: scope contains invalid characters ❌"
+              exit 1 ;;
+          esac
+        fi
+
+        # The auth key is the registry URL with the scheme removed
+        auth_key="//${registry#*://}"
+
+        # Build the npm _auth value as base64(user:password). The base64
+        # output contains no newlines, so unusual characters in the
+        # username or password cannot inject extra .npmrc lines.
+        auth=$(printf '%s:%s' "${user}" "${password}" | base64 | tr -d '\r\n')
+        echo "::add-mask::${auth}"
+
+        # Resolve the output directory and final file path. Reject an empty
+        # path up front and confirm the resolved directory is non-empty, so a
+        # bad input cannot silently place the file at '/.npmrc'.
+        if [ -z "${TARGET_PATH}" ]; then
+          echo "Error: path must not be empty ❌"
+          exit 1
+        fi
+        mkdir -p "${TARGET_PATH}"
+        target_dir=$(cd "${TARGET_PATH}" && pwd)
+        if [ -z "${target_dir}" ]; then
+          echo "Error: could not resolve output directory ❌"
+          echo "Received path: '${TARGET_PATH}'"
+          exit 1
+        fi
+        npmrc_path="${target_dir}/.npmrc"
+
+        # Write the file with restrictive permissions
+        umask 077
         {
-          printf '%s<<%s\n' 'output' "$delimiter"
-          printf '%s\n' "$input"
-          printf '%s\n' "$delimiter"
-        } >> "$GITHUB_OUTPUT"
-        echo "Action received: $input ✅"
-        echo "Action received: $input ✅" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${SCOPE}" ]; then
+            printf '%s:registry=%s\n' "${SCOPE}" "${registry}"
+          else
+            printf 'registry=%s\n' "${registry}"
+          fi
+          printf '%s:_auth=%s\n' "${auth_key}" "${auth}"
+          if [ "${ALWAYS_AUTH}" = "true" ]; then
+            printf 'always-auth=true\n'
+          fi
+        } > "${npmrc_path}"
+        chmod 600 "${npmrc_path}"
+
+        echo "Wrote authenticated .npmrc: ${npmrc_path} ✅"
+        echo "Registry: ${registry}"
+        echo "Wrote authenticated .npmrc for ${registry} ✅" \
+          >> "${GITHUB_STEP_SUMMARY}"
+
+        # Emit outputs with a random-delimiter heredoc so a value cannot
+        # inject additional keys into the output file
+        emit() {
+          local key="$1" value="$2" delimiter
+          delimiter="ghadelim_${RANDOM}${RANDOM}${RANDOM}${RANDOM}"
+          while [[ "${value}" == *"${delimiter}"* ]]; do
+            delimiter="ghadelim_${RANDOM}${RANDOM}${RANDOM}${RANDOM}"
+          done
+          {
+            printf '%s<<%s\n' "${key}" "${delimiter}"
+            printf '%s\n' "${value}"
+            printf '%s\n' "${delimiter}"
+          } >> "${GITHUB_OUTPUT}"
+        }
+        emit "npmrc_path" "${npmrc_path}"
+        emit "registry_url" "${registry}"
+
+    # Register a guaranteed post-job step that securely scrubs the .npmrc.
+    # Composite actions cannot define a post step directly, so this nested
+    # action carries the post hook on the action's behalf.
+    - name: "Register post-job .npmrc cleanup"
+      uses: ./scrub-npmrc
+      with:
+        npmrc_path: ${{ steps.write.outputs.npmrc_path }}
