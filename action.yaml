@@ -318,8 +318,12 @@ runs:
 
     # Register a guaranteed post-job step that securely scrubs the .npmrc.
     # Composite actions cannot define a post step directly, so this nested
-    # action carries the post hook on the action's behalf.
+    # action carries the post hook on the action's behalf. It is referenced
+    # by full path + commit SHA (not './scrub-npmrc') so the nested action
+    # resolves from this repository when the action is consumed remotely,
+    # rather than against the consumer's workspace.
     - name: "Register post-job .npmrc cleanup"
-      uses: ./scrub-npmrc
+      # yamllint disable-line rule:line-length
+      uses: lfreleng-actions/node-create-npmrc-action/scrub-npmrc@1bca45198b1e6562e0099e4ac598747725ed3fa4 # v0.1.0
       with:
         npmrc_path: ${{ steps.write.outputs.npmrc_path }}
