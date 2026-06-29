@@ -50,41 +50,217 @@ jobs:
         with:
           persist-credentials: false
 
-      # Perform setup prior to running test(s)
-      - name: "Testing setup step"
-        shell: bash
-        run: |
-          # Testing setup step
-          echo "Testing setup step"
-          echo "Testing setup step/summary output" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: "Running local action: ${{ github.repository }}"
+      # Test 1: explicit host/repository/user/password
+      - name: "Create .npmrc (explicit settings)"
+        id: explicit
         uses: ./
         with:
-          input: "test input 💬"
+          nexus_host: "nexus3.example.org"
+          nexus_repository: "npm.snapshot"
+          nexus_user: "testuser"
+          nexus_password: "testpass"
+          path: "/tmp/npmrc-explicit"
 
-      - name: "Validated local action: ${{ github.repository }}"
+      - name: "Verify explicit .npmrc"
         shell: bash
         env:
-          REPO: ${{ github.repository }}
+          NPMRC: ${{ steps.explicit.outputs.npmrc_path }}
+          REG: ${{ steps.explicit.outputs.registry_url }}
         run: |
-          # Local action validation
-          echo "Validated local action: $REPO"
-          echo "Validation step summary output" >> "$GITHUB_STEP_SUMMARY"
+          # Verify the explicitly configured .npmrc
+          set -euo pipefail
+          if [ -z "${NPMRC}" ] || [ ! -f "${NPMRC}" ]; then
+            echo "Error: .npmrc was not created ❌"
+            exit 1
+          fi
+          expected_reg="https://nexus3.example.org/repository/npm.snapshot/"
+          if [ "${REG}" != "${expected_reg}" ]; then
+            echo "Error: registry_url mismatch: ${REG} ❌"
+            exit 1
+          fi
+          if ! grep -Fqx "registry=${expected_reg}" "${NPMRC}"; then
+            echo "Error: registry line missing ❌"
+            exit 1
+          fi
+          expected_auth=$(printf '%s:%s' "testuser" "testpass" \
+            | base64 | tr -d '\r\n')
+          auth_line="//nexus3.example.org/repository/npm.snapshot/"
+          auth_line="${auth_line}:_auth=${expected_auth}"
+          if ! grep -Fqx "${auth_line}" "${NPMRC}"; then
+            echo "Error: auth line missing or incorrect ❌"
+            exit 1
+          fi
+          if ! grep -Fqx "always-auth=true" "${NPMRC}"; then
+            echo "Error: always-auth line missing ❌"
+            exit 1
+          fi
+          perms=$(stat -c '%a' "${NPMRC}")
+          if [ "${perms}" != "600" ]; then
+            echo "Error: .npmrc permissions are ${perms}, expected 600 ❌"
+            exit 1
+          fi
+          echo "Explicit .npmrc verified ✅" >> "$GITHUB_STEP_SUMMARY"
 
-      # yamllint disable-line rule:line-length
-      - name: "Running local action: ${{ github.repository }} [Override Failure]"
+      # Test 2: default host derivation (nexus3.<owner>.org)
+      - name: "Create .npmrc (default host)"
+        id: defaults
         uses: ./
+        with:
+          nexus_user: "deploy"
+          nexus_password: "secret-token"
+          path: "/tmp/npmrc-default"
+
+      - name: "Verify default host derivation"
+        shell: bash
+        env:
+          NPMRC: ${{ steps.defaults.outputs.npmrc_path }}
+          REG: ${{ steps.defaults.outputs.registry_url }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          # Verify the host defaulted to nexus3.<owner>.org
+          set -euo pipefail
+          expected="https://nexus3.${OWNER}.org/repository/npm.snapshot/"
+          if [ "${REG}" != "${expected}" ]; then
+            echo "Error: default registry mismatch: ${REG} ❌"
+            echo "Expected: ${expected}"
+            exit 1
+          fi
+          if ! grep -Fqx "registry=${expected}" "${NPMRC}"; then
+            echo "Error: default registry line missing ❌"
+            exit 1
+          fi
+          echo "Default host derivation verified ✅" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # Test 3: registry_url override with a scoped auth entry
+      - name: "Create .npmrc (registry_url override + scope)"
+        id: scoped
+        uses: ./
+        with:
+          registry_url: "https://nexus3.example.org/repository/npm.snapshot/"
+          scope: "@onap"
+          nexus_user: "scopeuser"
+          nexus_password: "scopepass"
+          path: "/tmp/npmrc-scope"
+
+      - name: "Verify scoped registry_url .npmrc"
+        shell: bash
+        env:
+          NPMRC: ${{ steps.scoped.outputs.npmrc_path }}
+          REG: ${{ steps.scoped.outputs.registry_url }}
+        run: |
+          # Verify the override URL and scoped registry/auth lines
+          set -euo pipefail
+          expected_reg="https://nexus3.example.org/repository/npm.snapshot/"
+          if [ "${REG}" != "${expected_reg}" ]; then
+            echo "Error: override registry mismatch: ${REG} ❌"
+            exit 1
+          fi
+          if ! grep -Fqx "@onap:registry=${expected_reg}" "${NPMRC}"; then
+            echo "Error: scoped registry line missing ❌"
+            exit 1
+          fi
+          expected_auth=$(printf '%s:%s' "scopeuser" "scopepass" \
+            | base64 | tr -d '\r\n')
+          auth_line="//nexus3.example.org/repository/npm.snapshot/"
+          auth_line="${auth_line}:_auth=${expected_auth}"
+          if ! grep -Fqx "${auth_line}" "${NPMRC}"; then
+            echo "Error: scoped auth line missing or incorrect ❌"
+            exit 1
+          fi
+          echo "Scoped registry_url .npmrc verified ✅" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      # Test 4: always_auth disabled omits the always-auth line
+      - name: "Create .npmrc (always_auth false)"
+        id: noauth
+        uses: ./
+        with:
+          nexus_host: "nexus3.example.org"
+          nexus_user: "testuser"
+          nexus_password: "testpass"
+          always_auth: "false"
+          path: "/tmp/npmrc-noauth"
+
+      - name: "Verify always-auth omitted"
+        shell: bash
+        env:
+          NPMRC: ${{ steps.noauth.outputs.npmrc_path }}
+        run: |
+          # The always-auth line must be absent when always_auth is false
+          set -euo pipefail
+          if grep -Fq "always-auth" "${NPMRC}"; then
+            echo "Error: always-auth line present when disabled ❌"
+            exit 1
+          fi
+          echo "always-auth omission verified ✅" >> "$GITHUB_STEP_SUMMARY"
+
+      # Test 5: failure when no password is available
+      - name: "Create .npmrc with no password [expected failure]"
         id: failure
         continue-on-error: true
+        uses: ./
         with:
-          invalid_input: "Some garbage"
+          nexus_host: "nexus3.example.org"
+          nexus_user: "testuser"
 
-      # Failure testing is also important
-      - name: "Error if step above did NOT fail"
+      - name: "Error if missing-password run did NOT fail"
         if: steps.failure.outcome == 'success'
         shell: bash
         run: |
-          # Error if step above did NOT fail
-          echo "Error: previous test step did NOT fail ❌"
+          # Failure testing is also important
+          echo "Error: action succeeded without a password ❌"
           exit 1
+
+      # Test 6: the post-job scrubber actually removes the .npmrc, and a
+      # symlink is unlinked without overwriting its target. The runner's
+      # post phase is simulated by invoking the scrubber with the state
+      # variables the runner would expose (STATE_isPost/STATE_npmrcPath).
+      - name: "Create .npmrc for the scrubber test"
+        id: scrub
+        uses: ./
+        with:
+          nexus_host: "nexus3.example.org"
+          nexus_user: "testuser"
+          nexus_password: "testpass"
+          path: "/tmp/npmrc-scrub"
+
+      - name: "Verify post-job scrubber removes the .npmrc"
+        shell: bash
+        env:
+          NPMRC: ${{ steps.scrub.outputs.npmrc_path }}
+        run: |
+          # Simulate the runner post phase and confirm the file is gone
+          set -euo pipefail
+          if [ ! -f "${NPMRC}" ]; then
+            echo "Error: .npmrc was not created for the scrub test ❌"
+            exit 1
+          fi
+          STATE_isPost=true STATE_npmrcPath="${NPMRC}" \
+            node scrub-npmrc/index.js
+          if [ -e "${NPMRC}" ]; then
+            echo "Error: scrubber did not remove the .npmrc ❌"
+            exit 1
+          fi
+          echo "Scrubber removed the .npmrc ✅" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Verify scrubber unlinks a symlink without touching target"
+        shell: bash
+        run: |
+          # A symlink must be removed without overwriting its target
+          set -euo pipefail
+          work=$(mktemp -d)
+          printf 'secret-target\n' > "${work}/target"
+          ln -s "${work}/target" "${work}/.npmrc"
+          STATE_isPost=true STATE_npmrcPath="${work}/.npmrc" \
+            node scrub-npmrc/index.js
+          if [ -L "${work}/.npmrc" ] || [ -e "${work}/.npmrc" ]; then
+            echo "Error: scrubber did not remove the .npmrc symlink ❌"
+            exit 1
+          fi
+          if [ "$(cat "${work}/target")" != "secret-target" ]; then
+            echo "Error: scrubber modified the symlink target ❌"
+            exit 1
+          fi
+          echo "Symlink unlinked without touching target ✅" \
+            >> "$GITHUB_STEP_SUMMARY"
