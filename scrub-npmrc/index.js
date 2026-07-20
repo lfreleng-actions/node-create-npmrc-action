@@ -34,8 +34,55 @@ function saveState(name, value) {
       delimiter = `ghadelim_${crypto.randomBytes(12).toString("hex")}`;
     } while (safe.includes(delimiter));
     fs.appendFileSync(stateFile, `${name}<<${delimiter}\n${safe}\n${delimiter}\n`);
+    // aislop-ignore-next-line ai-slop/swallowed-exception -- state recording is best effort; an I/O failure here must never fail the job
   } catch (error) {
     console.log(`State recording skipped: ${error.message}`);
+  }
+}
+
+// Overwrite an open descriptor's current contents with random bytes, then
+// flush. The size is read from the descriptor (not an earlier lstat) so a
+// file replaced or resized between lstat and open is still fully covered.
+function overwriteDescriptor(fd) {
+  const overwriteSize = fs.fstatSync(fd).size;
+  // Overwrite in fixed-size chunks so an unexpectedly large file cannot
+  // exhaust memory before the caller's catch can recover.
+  const chunkSize = 65536;
+  let remaining = overwriteSize;
+  while (remaining > 0) {
+    const n = remaining < chunkSize ? remaining : chunkSize;
+    // writeSync may perform a short write; decrement by the actual count and
+    // treat zero progress as a failure rather than looping forever or
+    // leaving bytes un-overwritten.
+    const written = fs.writeSync(fd, crypto.randomBytes(n), 0, n);
+    if (!written) {
+      throw new Error("overwrite made no progress (0 bytes written)");
+    }
+    remaining -= written;
+  }
+  if (overwriteSize > 0) {
+    fs.fsyncSync(fd);
+  }
+}
+
+// Best-effort overwrite of a regular file's contents before deletion. Opens
+// with O_NOFOLLOW so a symlink swapped in after lstat cannot redirect the
+// overwrite to another target. Throws on failure; the caller still unlinks.
+function overwriteFileContents(file) {
+  const noFollow = fs.constants.O_NOFOLLOW;
+  if (!noFollow) {
+    // Without O_NOFOLLOW the open could follow a symlink swapped in after
+    // lstat; skip the overwrite and rely on unlink alone.
+    console.log("O_NOFOLLOW unsupported; skipping overwrite, will unlink.");
+    return;
+  }
+  const fd = fs.openSync(file, fs.constants.O_RDWR | noFollow);
+  try {
+    overwriteDescriptor(fd);
+  } finally {
+    // Always close, even if the overwrite throws, so unlink can remove the
+    // file on platforms that refuse to unlink an open descriptor.
+    fs.closeSync(fd);
   }
 }
 
@@ -69,42 +116,8 @@ function scrub(file) {
       return;
     }
     try {
-      const noFollow = fs.constants.O_NOFOLLOW;
-      if (!noFollow) {
-        // Without O_NOFOLLOW the open could follow a symlink swapped in
-        // after lstat; skip the overwrite and rely on unlink alone.
-        console.log("O_NOFOLLOW unsupported; skipping overwrite, will unlink.");
-      } else {
-        const fd = fs.openSync(file, fs.constants.O_RDWR | noFollow);
-        try {
-          // Read the size from the opened descriptor rather than reusing the
-          // earlier lstat result, so a file replaced or resized between lstat
-          // and open cannot leave part of the current contents un-overwritten.
-          const overwriteSize = fs.fstatSync(fd).size;
-          // Overwrite in fixed-size chunks so an unexpectedly large file
-          // cannot exhaust memory before the catch can recover.
-          const chunkSize = 65536;
-          let remaining = overwriteSize;
-          while (remaining > 0) {
-            const n = remaining < chunkSize ? remaining : chunkSize;
-            // writeSync may perform a short write; decrement by the actual
-            // count and treat zero progress as a failure rather than
-            // looping forever or leaving bytes un-overwritten.
-            const written = fs.writeSync(fd, crypto.randomBytes(n), 0, n);
-            if (!written) {
-              throw new Error("overwrite made no progress (0 bytes written)");
-            }
-            remaining -= written;
-          }
-          if (overwriteSize > 0) {
-            fs.fsyncSync(fd);
-          }
-        } finally {
-          // Always close, even if the overwrite throws, so unlink can remove
-          // the file on platforms that refuse to unlink an open descriptor.
-          fs.closeSync(fd);
-        }
-      }
+      overwriteFileContents(file);
+      // aislop-ignore-next-line ai-slop/swallowed-exception -- overwrite is best-effort hardening; the file is still unlinked below
     } catch (overwriteError) {
       console.log(`Overwrite skipped: ${overwriteError.message}`);
     }
