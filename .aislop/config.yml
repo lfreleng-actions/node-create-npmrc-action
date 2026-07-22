@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# aislop quality gate configuration.
+#
+# console-leftover is disabled because this is a deliberately
+# dependency-free Node action: console.log is the intended logging
+# mechanism (it writes status lines to the job log), matching the
+# convention @actions/core uses, so these calls are production output,
+# not debugging leftovers.
+#
+# narrative-comment and trivial-comment are disabled because the single
+# source file deliberately carries explanatory comments documenting
+# non-obvious security and post-step lifecycle behaviour (symlink
+# handling, best-effort overwrite, STATE_isPost detection). These are
+# house style, not AI slop. The remaining swallowed-exception false
+# positives use inline aislop-ignore directives with reasons.
+rules:
+  ai-slop/console-leftover: "off"
+  ai-slop/narrative-comment: "off"
+  ai-slop/trivial-comment: "off"
