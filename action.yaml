@@ -324,6 +324,6 @@ runs:
     # rather than against the consumer's workspace.
     - name: "Register post-job .npmrc cleanup"
       # yamllint disable-line rule:line-length
-      uses: lfreleng-actions/node-create-npmrc-action/scrub-npmrc@ddf719ee65057195bcb7c813ec54df9b7db25e1d # v0.1.1
+      uses: lfreleng-actions/node-create-npmrc-action/scrub-npmrc@ec0cc1fa52dea5205897d0e3b25dfaf4ebe095fe # v0.1.2
       with:
         npmrc_path: ${{ steps.write.outputs.npmrc_path }}
