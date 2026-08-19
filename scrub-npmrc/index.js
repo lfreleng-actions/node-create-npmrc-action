@@ -101,7 +101,7 @@ function scrub(file) {
     let info;
     try {
       info = fs.lstatSync(file);
-    } catch (statError) {
+    } catch {
       console.log(`.npmrc not found; nothing to scrub: ${file}`);
       return;
     }
