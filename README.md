@@ -13,10 +13,21 @@ removes it once the job finishes.
 
 ## node-create-npmrc-action
 
-This action writes an `.npmrc` file containing the registry URL and a Basic
-authentication entry (`_auth`) for publishing npm packages to a Sonatype Nexus
-repository. The npm `_auth` field holds `base64(username:password)`, which npm
-sends as an `Authorization: Basic` header.
+This action writes an `.npmrc` file containing the registry URL and an
+authentication entry for publishing npm packages.
+
+Two authentication styles are available:
+
+- **Basic auth** (`_auth`) holds `base64(username:password)`, which npm sends
+  as an `Authorization: Basic` header. Sonatype Nexus accepts this form, and
+  the action defaults to it, driven by `nexus_user`/`nexus_password`.
+- **Bearer token** (`_authToken`) holds an opaque token. Registries that reject
+  Basic auth for publishing, notably `registry.npmjs.org`, require this form.
+  Supply it with `auth_token`.
+
+The two are mutually exclusive; supplying `auth_token` alongside
+`nexus_password` or `load_credential` fails the action rather than picking a
+winner.
 
 The registry defaults to the modern Nexus 3 platform for the calling
 organisation. With repository owner `onap`, the host resolves to
@@ -26,10 +37,10 @@ projects that publish elsewhere, including the older Nexus 2 servers (such as
 `nexus.onap.org`) that the defaults skip in favour of Nexus 3.
 
 The username defaults to the calling repository name, matching the Nexus
-account convention used across these projects. The action masks the password
-and the derived `_auth` value in the workflow log, writes the file with `600`
-permissions, and registers a post-job step that scrubs the file at the end of
-the run.
+account convention used across these projects; token auth needs no username.
+The action masks the credential (and the derived `_auth` value) in the workflow
+log, writes the file with `600` permissions, and registers a post-job step that
+scrubs the file at the end of the run.
 
 ## Usage Example
 
@@ -84,19 +95,20 @@ steps:
 
 <!-- markdownlint-disable MD013 -->
 
-| Name                     | Required | Default                         | Description                                                                  |
-| ------------------------ | -------- | ------------------------------- | ---------------------------------------------------------------------------- |
-| nexus_host               | False    | `nexus3.<repository_owner>.org` | Nexus server hostname                                                        |
-| nexus_repository         | False    | `npm.snapshot`                  | Nexus npm repository/location                                                |
-| registry_url             | False    | n/a                             | Full registry URL override ending with `/`; ignores host/repository when set |
-| scope                    | False    | n/a                             | npm scope for the auth entry (for example `@onap`)                           |
-| nexus_user               | False    | Calling repository name         | Registry username                                                            |
-| nexus_password           | False    | n/a                             | Registry password/token; required unless `load_credential` is `true`         |
-| load_credential          | False    | false                           | Fetch the password from 1Password via `credential-load-action`               |
-| vault_mapping_json       | False    | n/a                             | JSON mapping repository owner to 1Password vault (when loading a credential) |
-| op_service_account_token | False    | n/a                             | 1Password service account token (when loading a credential)                  |
-| path                     | False    | `.`                             | Directory in which to write `.npmrc`                                         |
-| always_auth              | False    | true                            | Add `always-auth=true` to the generated `.npmrc`                             |
+| Name                     | Required | Default                         | Description                                                                                                       |
+| ------------------------ | -------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| nexus_host               | False    | `nexus3.<repository_owner>.org` | Nexus server hostname                                                                                             |
+| nexus_repository         | False    | `npm.snapshot`                  | Nexus npm repository/location                                                                                     |
+| registry_url             | False    | n/a                             | Full registry URL override ending with `/`; ignores host/repository when set                                      |
+| scope                    | False    | n/a                             | npm scope for the auth entry (for example `@onap`)                                                                |
+| nexus_user               | False    | Calling repository name         | Registry username                                                                                                 |
+| nexus_password           | False    | n/a                             | Registry password for Basic auth; required unless `load_credential` is `true`, or `auth_token` selects token auth |
+| auth_token               | False    | n/a                             | Bearer token written as `_authToken`; excludes `nexus_password`/`load_credential`                                 |
+| load_credential          | False    | false                           | Fetch the password from 1Password via `credential-load-action`                                                    |
+| vault_mapping_json       | False    | n/a                             | JSON mapping repository owner to 1Password vault (when loading a credential)                                      |
+| op_service_account_token | False    | n/a                             | 1Password service account token (when loading a credential)                                                       |
+| path                     | False    | `.`                             | Directory in which to write `.npmrc`                                                                              |
+| always_auth              | False    | true                            | Add `always-auth=true` to the generated `.npmrc`                                                                  |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -118,7 +130,7 @@ steps:
 1. **Credential (optional)**: When `load_credential` is `true`, fetches the password through `credential-load-action`
 2. **Registry resolution**: Builds `https://<host>/repository/<repository>/`, or uses `registry_url` verbatim when supplied
 3. **Validation**: Checks the host, repository, and scope against a strict character set so the `.npmrc` structure stays intact
-4. **Auth entry**: Computes `base64(username:password)`; the base64 output carries no newlines, so unusual credential characters cannot inject extra lines
+4. **Auth entry**: For Basic auth, computes `base64(username:password)`; the base64 output carries no newlines, so unusual credential characters cannot inject extra lines. For token auth, writes `auth_token` verbatim after checking it against a whole-string allowlist that excludes newlines
 5. **Write**: Emits the `.npmrc` with `600` permissions and masks the secret in the log
 6. **Cleanup**: A nested post-job step overwrites and deletes the `.npmrc` at the end of the run
 
@@ -128,7 +140,9 @@ steps:
 
 <!-- markdownlint-disable MD013 -->
 
-- The auth entry uses the npm `_auth` (Basic) form: `base64(username:password)`
+- The auth entry uses either the npm `_auth` (Basic) form, `base64(username:password)`, or the `_authToken` (bearer) form for an `auth_token`
+- `auth_token` accepts `A-Z a-z 0-9 . _ ~ + / = -`; the excluded characters (notably CR and LF) are what would otherwise permit `.npmrc` injection
+- Use `_authToken` for `registry.npmjs.org`, which rejects Basic auth for publishing
 - The host validation accepts `A-Z a-z 0-9 . -`; the repository accepts `A-Z a-z 0-9 . _ -`
 - The defaults target Nexus 3; pass `registry_url` to publish to a Nexus 2 server
 - The post-job cleanup never fails the job, even when the file moved or was already removed
