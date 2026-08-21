@@ -212,7 +212,109 @@ jobs:
           echo "Error: action succeeded without a password ❌"
           exit 1
 
-      # Test 6: the post-job scrubber actually removes the .npmrc, and a
+      # Test 6: token auth writes an _authToken entry, not _auth
+      - name: "Create .npmrc (auth_token)"
+        id: token
+        uses: ./
+        with:
+          registry_url: "https://registry.npmjs.org/"
+          auth_token: "npm_TESTtoken0123456789abcdefGHIJKLMNOP"
+          path: "/tmp/npmrc-token"
+
+      - name: "Verify token .npmrc"
+        shell: bash
+        env:
+          NPMRC: ${{ steps.token.outputs.npmrc_path }}
+          REG: ${{ steps.token.outputs.registry_url }}
+        run: |
+          # Token auth must emit _authToken and must not emit _auth
+          set -euo pipefail
+          if [ "${REG}" != "https://registry.npmjs.org/" ]; then
+            echo "Error: token registry mismatch: ${REG} ❌"
+            exit 1
+          fi
+          auth_line="//registry.npmjs.org/:_authToken="
+          auth_line="${auth_line}npm_TESTtoken0123456789abcdefGHIJKLMNOP"
+          if ! grep -Fqx "${auth_line}" "${NPMRC}"; then
+            echo "Error: _authToken line missing or incorrect ❌"
+            exit 1
+          fi
+          if grep -Fq "_auth=" "${NPMRC}"; then
+            echo "Error: Basic _auth line present in token mode ❌"
+            exit 1
+          fi
+          echo "Token .npmrc verified ✅" >> "$GITHUB_STEP_SUMMARY"
+
+      # Test 7: token auth combined with a scope
+      - name: "Create .npmrc (auth_token + scope)"
+        id: token_scope
+        uses: ./
+        with:
+          registry_url: "https://registry.npmjs.org/"
+          scope: "@onap"
+          auth_token: "npm_scopedTOKEN0123456789abcdefGHIJKL"
+          path: "/tmp/npmrc-token-scope"
+
+      - name: "Verify scoped token .npmrc"
+        shell: bash
+        env:
+          NPMRC: ${{ steps.token_scope.outputs.npmrc_path }}
+        run: |
+          # The scope drives the registry line; auth stays registry-scoped
+          set -euo pipefail
+          reg="https://registry.npmjs.org/"
+          if ! grep -Fqx "@onap:registry=${reg}" "${NPMRC}"; then
+            echo "Error: scoped registry line missing ❌"
+            exit 1
+          fi
+          auth_line="//registry.npmjs.org/:_authToken="
+          auth_line="${auth_line}npm_scopedTOKEN0123456789abcdefGHIJKL"
+          if ! grep -Fqx "${auth_line}" "${NPMRC}"; then
+            echo "Error: scoped _authToken line missing ❌"
+            exit 1
+          fi
+          echo "Scoped token .npmrc verified ✅" >> "$GITHUB_STEP_SUMMARY"
+
+      # Test 8: auth_token and nexus_password together must fail
+      - name: "Create .npmrc with both credentials [expected failure]"
+        id: conflict
+        continue-on-error: true
+        uses: ./
+        with:
+          registry_url: "https://registry.npmjs.org/"
+          auth_token: "npm_conflictTOKEN0123456789abcdefGHI"
+          nexus_password: "testpass"
+          path: "/tmp/npmrc-conflict"
+
+      - name: "Error if conflicting-credential run did NOT fail"
+        if: steps.conflict.outcome == 'success'
+        shell: bash
+        run: |
+          # Ambiguous credentials must fail rather than pick a winner
+          echo "Error: action succeeded with conflicting credentials ❌"
+          exit 1
+
+      # Test 9: a token outside the allowlist must be rejected. A space
+      # stands in for the whole excluded set, which also covers the CR
+      # and LF that would otherwise inject extra .npmrc lines.
+      - name: "Create .npmrc with an invalid token [expected failure]"
+        id: badtoken
+        continue-on-error: true
+        uses: ./
+        with:
+          registry_url: "https://registry.npmjs.org/"
+          auth_token: "npm_bad token"
+          path: "/tmp/npmrc-badtoken"
+
+      - name: "Error if invalid-token run did NOT fail"
+        if: steps.badtoken.outcome == 'success'
+        shell: bash
+        run: |
+          # Character validation is a security control, not a nicety
+          echo "Error: action accepted an invalid auth_token ❌"
+          exit 1
+
+      # Test 10: the post-job scrubber actually removes the .npmrc, and a
       # symlink is unlinked without overwriting its target. The runner's
       # post phase is simulated by invoking the scrubber with the state
       # variables the runner would expose (STATE_isPost/STATE_npmrcPath).

@@ -34,7 +34,12 @@ inputs:
     default: ""
   nexus_password:
     # yamllint disable-line rule:line-length
-    description: "Registry password/token; required unless load_credential is 'true'"
+    description: "Registry password for Basic auth; required unless load_credential is 'true', or auth_token selects token auth instead"
+    required: false
+    default: ""
+  auth_token:
+    # yamllint disable-line rule:line-length
+    description: "Bearer token written as '_authToken'; use for registries that reject Basic auth (for example registry.npmjs.org). Mutually exclusive with nexus_password and load_credential"
     required: false
     default: ""
   # Optional 1Password credential loading
@@ -78,8 +83,12 @@ runs:
   steps:
     # Optionally fetch the registry password from 1Password. Disabled by
     # default; callers that already hold the password pass it directly.
+    # Skipped when auth_token is set: that combination is a configuration
+    # error, reported by the step below, and reading the secret first
+    # would either fail for an unrelated reason or read it needlessly.
     - name: "Load Nexus credential from 1Password"
-      if: inputs.load_credential == 'true'
+      # yamllint disable-line rule:line-length
+      if: inputs.load_credential == 'true' && inputs.auth_token == ''
       id: credential
       # yamllint disable-line rule:line-length
       uses: lfreleng-actions/credential-load-action@560620cbe18a05ace2104a8997176c094cd0a940 # v2.0.3
@@ -100,6 +109,7 @@ runs:
         SCOPE: ${{ inputs.scope }}
         NEXUS_USER: ${{ inputs.nexus_user }}
         INPUT_PASSWORD: ${{ inputs.nexus_password }}
+        INPUT_AUTH_TOKEN: ${{ inputs.auth_token }}
         LOADED_CREDENTIAL: ${{ steps.credential.outputs.credential }}
         LOAD_CREDENTIAL: ${{ inputs.load_credential }}
         TARGET_PATH: ${{ inputs.path }}
@@ -124,40 +134,76 @@ runs:
             exit 1 ;;
         esac
 
-        # Select the password source and mask it as early as possible
-        if [ "${LOAD_CREDENTIAL}" = "true" ]; then
-          password="${LOADED_CREDENTIAL}"
+        # Token auth and Basic auth are mutually exclusive. The token is
+        # written verbatim as '_authToken' while a password is folded into
+        # a base64 '_auth' value, so accepting both would leave the
+        # effective credential ambiguous.
+        if [ -n "${INPUT_AUTH_TOKEN}" ]; then
+          if [ -n "${INPUT_PASSWORD}" ] || \
+            [ "${LOAD_CREDENTIAL}" = "true" ]; then
+            echo "Error: auth_token conflicts with password auth ❌"
+            echo "Use auth_token on its own, or use Basic auth with"
+            echo "nexus_password or load_credential, but not both styles"
+            exit 1
+          fi
+          auth_mode='token'
         else
-          password="${INPUT_PASSWORD}"
+          auth_mode='basic'
         fi
-        if [ -z "${password}" ]; then
-          echo "Error: no registry password available ❌"
-          echo "Provide nexus_password, or set load_credential to 'true'"
-          exit 1
-        fi
-        # Escape workflow-command metacharacters before masking, so a value
-        # containing %, CR, or LF cannot break the ::add-mask:: command line
-        # or inject further runner commands. The original value is masked.
-        masked="${password}"
-        masked="${masked//'%'/'%25'}"
-        masked="${masked//$'\r'/'%0D'}"
-        masked="${masked//$'\n'/'%0A'}"
-        echo "::add-mask::${masked}"
 
-        # The username defaults to the calling repository name
-        user="${NEXUS_USER}"
-        if [ -z "${user}" ]; then
-          user="${REPO_NAME}"
-        fi
-        # github.event.repository.name is absent for some triggers (for
-        # example workflow_call), so fall back to the repository portion of
-        # GITHUB_REPOSITORY (owner/repo), which is populated for every event.
-        if [ -z "${user}" ] && [ -n "${REPO_SLUG}" ]; then
-          user="${REPO_SLUG##*/}"
-        fi
-        if [ -z "${user}" ]; then
-          echo "Error: registry username unavailable in context ❌"
-          exit 1
+        if [ "${auth_mode}" = 'token' ]; then
+          token="${INPUT_AUTH_TOKEN}"
+          # The token reaches the .npmrc verbatim, so constrain it with a
+          # whole-string allowlist. Anything outside this set could inject
+          # further .npmrc lines or break the auth entry.
+          case "${token}" in
+            *[!A-Za-z0-9._~+/=-]*)
+              echo "Error: auth_token contains invalid characters ❌"
+              echo "Allowed characters: A-Z a-z 0-9 . _ ~ + / = -"
+              exit 1 ;;
+          esac
+          # The allowlist above excludes %, CR and LF, so the value needs
+          # no workflow-command escaping before masking
+          echo "::add-mask::${token}"
+        else
+          # Select the password source and mask it as early as possible
+          if [ "${LOAD_CREDENTIAL}" = "true" ]; then
+            password="${LOADED_CREDENTIAL}"
+          else
+            password="${INPUT_PASSWORD}"
+          fi
+          if [ -z "${password}" ]; then
+            echo "Error: no registry credential available ❌"
+            echo "Provide nexus_password, set load_credential to 'true',"
+            echo "or provide auth_token for token-based registries"
+            exit 1
+          fi
+          # Escape workflow-command metacharacters before masking, so a
+          # value containing %, CR, or LF cannot break the ::add-mask::
+          # command line or inject further runner commands. The original
+          # value is masked.
+          masked="${password}"
+          masked="${masked//'%'/'%25'}"
+          masked="${masked//$'\r'/'%0D'}"
+          masked="${masked//$'\n'/'%0A'}"
+          echo "::add-mask::${masked}"
+
+          # The username defaults to the calling repository name
+          user="${NEXUS_USER}"
+          if [ -z "${user}" ]; then
+            user="${REPO_NAME}"
+          fi
+          # github.event.repository.name is absent for some triggers (for
+          # example workflow_call), so fall back to the repository portion
+          # of GITHUB_REPOSITORY (owner/repo), which is populated for every
+          # event.
+          if [ -z "${user}" ] && [ -n "${REPO_SLUG}" ]; then
+            user="${REPO_SLUG##*/}"
+          fi
+          if [ -z "${user}" ]; then
+            echo "Error: registry username unavailable in context ❌"
+            exit 1
+          fi
         fi
 
         # Resolve the registry URL, either from an explicit override or by
@@ -248,13 +294,15 @@ runs:
         # The auth key is the registry URL with the scheme removed
         auth_key="//${registry#*://}"
 
-        # Build the npm _auth value as base64(user:password). The base64
-        # output contains no newlines, so unusual characters in the
-        # username or password cannot inject extra .npmrc lines.
-        auth=$(printf '%s:%s' "${user}" "${password}" | base64 | tr -d '\r\n')
-        # base64 output is restricted to [A-Za-z0-9+/=], so the auth value
-        # needs no workflow-command escaping before masking
-        echo "::add-mask::${auth}"
+        if [ "${auth_mode}" = 'basic' ]; then
+          # Build the npm _auth value as base64(user:password). The base64
+          # output contains no newlines, so unusual characters in the
+          # username or password cannot inject extra .npmrc lines.
+          auth=$(printf '%s:%s' "${user}" "${password}" | base64 | tr -d '\r\n')
+          # base64 output is restricted to [A-Za-z0-9+/=], so the auth value
+          # needs no workflow-command escaping before masking
+          echo "::add-mask::${auth}"
+        fi
 
         # Resolve the output directory and final file path. Reject an empty
         # path up front and confirm the resolved directory is non-empty, so a
@@ -287,7 +335,11 @@ runs:
           else
             printf 'registry=%s\n' "${registry}"
           fi
-          printf '%s:_auth=%s\n' "${auth_key}" "${auth}"
+          if [ "${auth_mode}" = 'token' ]; then
+            printf '%s:_authToken=%s\n' "${auth_key}" "${token}"
+          else
+            printf '%s:_auth=%s\n' "${auth_key}" "${auth}"
+          fi
           if [ "${ALWAYS_AUTH}" = "true" ]; then
             printf 'always-auth=true\n'
           fi
