@@ -91,7 +91,7 @@ runs:
       if: inputs.load_credential == 'true' && inputs.auth_token == ''
       id: credential
       # yamllint disable-line rule:line-length
-      uses: lfreleng-actions/credential-load-action@560620cbe18a05ace2104a8997176c094cd0a940 # v2.0.3
+      uses: lfreleng-actions/credential-load-action@025002b47f4302fb7252175c470da69435060176 # v2.0.4
       with:
         vault_mapping_json: ${{ inputs.vault_mapping_json }}
         op_service_account_token: ${{ inputs.op_service_account_token }}
