@@ -15,6 +15,9 @@
 # handling, best-effort overwrite, STATE_isPost detection). These are
 # house style, not AI slop. The remaining swallowed-exception false
 # positives use inline aislop-ignore directives with reasons.
+ci:
+  failBelow: 100
+
 rules:
   ai-slop/console-leftover: "off"
   ai-slop/narrative-comment: "off"
