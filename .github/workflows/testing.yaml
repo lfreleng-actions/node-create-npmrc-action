@@ -53,7 +53,7 @@ jobs:
       # Test 1: explicit host/repository/user/password
       - name: "Create .npmrc (explicit settings)"
         id: explicit
-        uses: ./
+        uses: $/
         with:
           nexus_host: "nexus3.example.org"
           nexus_repository: "npm.snapshot"
@@ -104,7 +104,7 @@ jobs:
       # Test 2: default host derivation (nexus3.<owner>.org)
       - name: "Create .npmrc (default host)"
         id: defaults
-        uses: ./
+        uses: $/
         with:
           nexus_user: "deploy"
           nexus_password: "secret-token"
@@ -135,7 +135,7 @@ jobs:
       # Test 3: registry_url override with a scoped auth entry
       - name: "Create .npmrc (registry_url override + scope)"
         id: scoped
-        uses: ./
+        uses: $/
         with:
           registry_url: "https://nexus3.example.org/repository/npm.snapshot/"
           scope: "@onap"
@@ -174,7 +174,7 @@ jobs:
       # Test 4: always_auth disabled omits the always-auth line
       - name: "Create .npmrc (always_auth false)"
         id: noauth
-        uses: ./
+        uses: $/
         with:
           nexus_host: "nexus3.example.org"
           nexus_user: "testuser"
@@ -199,7 +199,7 @@ jobs:
       - name: "Create .npmrc with no password [expected failure]"
         id: failure
         continue-on-error: true
-        uses: ./
+        uses: $/
         with:
           nexus_host: "nexus3.example.org"
           nexus_user: "testuser"
@@ -215,7 +215,7 @@ jobs:
       # Test 6: token auth writes an _authToken entry, not _auth
       - name: "Create .npmrc (auth_token)"
         id: token
-        uses: ./
+        uses: $/
         with:
           registry_url: "https://registry.npmjs.org/"
           auth_token: "npm_TESTtoken0123456789abcdefGHIJKLMNOP"
@@ -248,7 +248,7 @@ jobs:
       # Test 7: token auth combined with a scope
       - name: "Create .npmrc (auth_token + scope)"
         id: token_scope
-        uses: ./
+        uses: $/
         with:
           registry_url: "https://registry.npmjs.org/"
           scope: "@onap"
@@ -279,7 +279,7 @@ jobs:
       - name: "Create .npmrc with both credentials [expected failure]"
         id: conflict
         continue-on-error: true
-        uses: ./
+        uses: $/
         with:
           registry_url: "https://registry.npmjs.org/"
           auth_token: "npm_conflictTOKEN0123456789abcdefGHI"
@@ -300,7 +300,7 @@ jobs:
       - name: "Create .npmrc with an invalid token [expected failure]"
         id: badtoken
         continue-on-error: true
-        uses: ./
+        uses: $/
         with:
           registry_url: "https://registry.npmjs.org/"
           auth_token: "npm_bad token"
@@ -320,7 +320,7 @@ jobs:
       # variables the runner would expose (STATE_isPost/STATE_npmrcPath).
       - name: "Create .npmrc for the scrubber test"
         id: scrub
-        uses: ./
+        uses: $/
         with:
           nexus_host: "nexus3.example.org"
           nexus_user: "testuser"
