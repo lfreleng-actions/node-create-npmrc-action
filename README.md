@@ -5,9 +5,6 @@
 
 # 📦 Node Create .npmrc Action
 
-<!-- markdownlint-disable-next-line MD013 -->
-[![pre-commit.ci status badge]][pre-commit.ci results page]
-
 Creates an `.npmrc` authenticated against a Nexus npm registry, then securely
 removes it once the job finishes.
 
@@ -148,6 +145,3 @@ steps:
 - The post-job cleanup never fails the job, even when the file moved or was already removed
 
 <!-- markdownlint-enable MD013 -->
-
-[pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/node-create-npmrc-action/main
-[pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/node-create-npmrc-action/main.svg
